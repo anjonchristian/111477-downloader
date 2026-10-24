@@ -1,0 +1,75 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Smoke test
+        shell: pwsh
+        run: python -c "import app; print('app import ok')"
+
+      - name: Build one-file EXE
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
+            --name "111477-Downloader" `
+            --icon "assets/icon.ico" `
+            --add-data "assets;assets" `
+            --collect-all patchright `
+            --hidden-import patchright.sync_api `
+            app.py
+          if (!(Test-Path "dist/111477-Downloader.exe")) { throw "Build did not produce an EXE" }
+          Get-Item "dist/111477-Downloader.exe" | Select-Object Name, Length
+
+      - name: Self-test bundled browser driver
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/111477-Downloader.exe" -ArgumentList "--selftest" -Wait -PassThru
+          $log = Join-Path $env:LOCALAPPDATA "111477 Downloader\selftest.log"
+          if (Test-Path $log) { Get-Content $log }
+          if ($p.ExitCode -ne 0) { throw "Self-test failed with exit code $($p.ExitCode)" }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 111477-Downloader-windows
+          path: dist/111477-Downloader.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach EXE to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/111477-Downloader.exe
+          generate_release_notes: true
